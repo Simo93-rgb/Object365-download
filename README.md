@@ -36,6 +36,8 @@ Convert annotations to YOLO format
 Organize files in the appropriate directory structure
 By default, the script uses 16 threads for parallel downloading. You can modify this in the script.
 
+You can also use the Jupyter notebook.
+
 ## Output Structure
 ```
 /path/to/output_dir/
