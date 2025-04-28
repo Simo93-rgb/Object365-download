@@ -33,7 +33,7 @@ def is_tarfile(filename: Union[str, Path]) -> bool:
 def unzip_file(file: Union[str, Path], 
                path: Optional[Union[str, Path]] = None, 
                exclude: Tuple[str, ...] = (".DS_Store", "__MACOSX"), 
-               threads: int = 8) -> None:
+               threads: int = 1) -> None:
     """
     Extracts the contents of a ZIP file to a specified directory, with support for multithreaded extraction
     and optional exclusion of specific files or directories.
@@ -188,7 +188,7 @@ def download_one(url: str,
     if unzip and (f.suffix == ".gz" or is_zipfile(f) or is_tarfile(f)):
         print(f"Unzipping {f}...")
         if is_zipfile(f):
-            unzip_file(f, dir, threads=threads)  # unzip
+            unzip_file(f, dir, threads=1)  # unzip
         elif is_tarfile(f):
             tar_dir = Path(f.parent)
             with tarfile.open(f, "r:*") as tar:
@@ -219,7 +219,7 @@ def download(url: Union[str, List[str], Path],
              dir: Union[str, Path] = ".", 
              unzip: bool = True, 
              delete: bool = False, 
-             threads: int = 8, 
+             threads: int = 16, 
              retry: int = 3) -> None:
     """
     Downloads a file or multiple files from the given URL(s) to the specified directory.
@@ -242,12 +242,13 @@ def download(url: Union[str, List[str], Path],
     os.makedirs(dir, exist_ok=True)  # make directory
     if threads > 1:
         pool = ThreadPool(threads)
-        pool.imap(lambda x: download_one(*x), zip(url, repeat(dir)))  # multithreaded
+        pool.imap(lambda x: download_one(x[0], x[1], delete=delete, unzip=unzip, threads=threads, retry=retry), 
+                 zip(url, repeat(dir)))  # multithreaded        
         pool.close()
         pool.join()
     else:
         for u in [url] if isinstance(url, (str, Path)) else url:
-            download_one(u, dir)
+            download_one(u, dir, delete=delete, unzip=unzip, threads=threads, retry=retry)
 
 def xyxy2xywhn(xyxy: np.ndarray, 
                w: Union[int, float] = 640, 
@@ -285,9 +286,9 @@ def xyxy2xywhn(xyxy: np.ndarray,
     return y
 
 if __name__ == "__main__":
-    threads = 16  # Number of threads for downloading
+    threads = 20  # Number of threads for downloading
     # Set the base directory on local disk E (adapted for WSL)
-    base_dir = Path("/mnt/e/object365")
+    base_dir = Path("/mnt/d/objects365")
 
     # Make sure the base directory exists
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -336,15 +337,15 @@ if __name__ == "__main__":
                 threads=threads,
             )
 
-        # Move all images to the main image directory
-        print(f"Moving images to the {split} directory...")
-        for f in tqdm(list(images.rglob("*.jpg")), desc=f"Moving {split} images"):
-            f.rename(images / f.name)  # Move to images directory
+        # # Move all images to the main image directory
+        # print(f"Moving images to the {split} directory...")
+        # for f in tqdm(list(images.rglob("*.jpg")), desc=f"Moving {split} images"):
+        #     f.rename(images / f.name)  # Move to images directory
 
         # Process annotations in YOLO format
         print(f"Processing annotations for {split}...")
         annotations_path = base_dir / f"zhiyuan_objv2_{split}.json"
-        if not annotations_path.exists() and split == "train":
+        if split == "train" and not annotations_path.exists():
             tar_path = base_dir / f"zhiyuan_objv2_{split}.tar.gz"
             if tar_path.exists():
                 # Check if annotations have already been extracted
@@ -359,34 +360,30 @@ if __name__ == "__main__":
         
         # For validation set, copy the JSON to the labels directory
         if split == "val" and annotations_path.exists():
-            import shutil
-            labels_json = labels / annotations_path.name
-            if not labels_json.exists():
-                print(f"Copying annotations to {labels}")
-                shutil.copy(annotations_path, labels)
-            else:
-                print(f"Annotations already in place: {labels_json}")
-        
-        if annotations_path.exists():
             coco = COCO(annotations_path)
             names = [x["name"] for x in coco.loadCats(coco.getCatIds())]
-            
+
             for cid, cat in enumerate(names):
                 catIds = coco.getCatIds(catNms=[cat])
                 imgIds = coco.getImgIds(catIds=catIds)
-                
+
                 for im in tqdm(coco.loadImgs(imgIds), desc=f"Class {cid + 1}/{len(names)} {cat}"):
                     width, height = im["width"], im["height"]
                     path = Path(im["file_name"])  # image file name
-                    
+
                     try:
-                        with open(labels / path.with_suffix(".txt").name, "a", encoding="utf-8") as file:
+                        label_file = labels / path.with_suffix(".txt").name
+                        with open(label_file, "a", encoding="utf-8") as file:
                             annIds = coco.getAnnIds(imgIds=im["id"], catIds=catIds, iscrowd=None)
+                            if not annIds:
+                                print(f"No annotations found for image {path}. Skipping.")
+                                continue
                             for a in coco.loadAnns(annIds):
                                 x, y, w, h = a["bbox"]  # bounding box in xywh (xy is top-left corner)
                                 xyxy = np.array([[x, y, x + w, y + h]])  # convert to xyxy format
                                 x, y, w, h = xyxy2xywhn(xyxy, w=width, h=height, clip=True)[0]  # convert to xywhn
                                 file.write(f"{cid} {x:.5f} {y:.5f} {w:.5f} {h:.5f}\n")
+                        print(f"Annotations written to {label_file}")
                     except Exception as e:
                         print(f"Error processing image {path}: {e}")
 
